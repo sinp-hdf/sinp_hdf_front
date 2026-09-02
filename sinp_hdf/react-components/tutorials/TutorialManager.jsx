@@ -1,0 +1,446 @@
+import { useEffect, useRef } from "react";
+import Shepherd from "shepherd.js";
+import "shepherd.js/dist/css/shepherd.css";
+import tutorialContent from "./tutorial.content.json";
+
+const STORAGE_KEYS = {
+  disabled: "sinpTutorialDisabled",
+  seen: "sinpTutorialSeen",
+  introShown: "sinpTutorialIntroShown",
+  mviewerHelpDisabled: "helpCheckBox",
+};
+
+const INTRO_SELECTOR = "#sinp-tutorial-start";
+const DISABLE_SELECTOR = "#sinp-tutorial-disable";
+const RESET_SELECTOR = "#sinp-tutorial-reset";
+const TUTORIAL_TAB_SELECTOR = "#sinp-tutoriels-tab";
+const HELP_MODAL_SELECTOR = "#help";
+const SHEPHERD_CLEANUP_DELAY = 350;
+
+const waitForElement = (selector, timeout = 4000) =>
+  new Promise((resolve) => {
+    const existingElement = document.querySelector(selector);
+
+    if (existingElement) {
+      resolve(existingElement);
+      return;
+    }
+
+    const observer = new MutationObserver(() => {
+      const element = document.querySelector(selector);
+
+      if (element) {
+        observer.disconnect();
+        clearTimeout(timer);
+        resolve(element);
+      }
+    });
+
+    const timer = window.setTimeout(() => {
+      observer.disconnect();
+      resolve(null);
+    }, timeout);
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+  });
+
+const waitForAnyTarget = async (selectors, timeout = 3000) => {
+  const targetSelectors = Array.isArray(selectors) ? selectors : [selectors];
+
+  for (const selector of targetSelectors) {
+    const element = await waitForElement(selector, timeout);
+
+    if (element) {
+      return {
+        selector,
+        element,
+      };
+    }
+  }
+
+  return null;
+};
+
+const shouldShowIntro = () =>
+  localStorage.getItem(STORAGE_KEYS.disabled) !== "true" &&
+  localStorage.getItem(STORAGE_KEYS.seen) !== "true";
+
+const markTutorialSeen = () => {
+  localStorage.setItem(STORAGE_KEYS.seen, "true");
+  localStorage.setItem(STORAGE_KEYS.mviewerHelpDisabled, "true");
+};
+
+const disableTutorial = () => {
+  localStorage.setItem(STORAGE_KEYS.disabled, "true");
+  markTutorialSeen();
+};
+
+const activateTutorialTab = () => {
+  const tabTrigger = document.querySelector(TUTORIAL_TAB_SELECTOR);
+
+  if (!tabTrigger) {
+    return;
+  }
+
+  const help = tabTrigger.closest(".sinp-help");
+  const targetSelector = tabTrigger.getAttribute("href");
+  const targetPanel = targetSelector ? document.querySelector(targetSelector) : null;
+
+  help?.querySelectorAll(".sinp-help-tabs a").forEach((tab) => {
+    tab.classList.toggle("active", tab === tabTrigger);
+    tab.parentElement?.classList.toggle("active", tab === tabTrigger);
+    tab.setAttribute("aria-selected", tab === tabTrigger ? "true" : "false");
+  });
+
+  help?.querySelectorAll(".tab-pane").forEach((panel) => {
+    const isActivePanel = panel === targetPanel;
+    panel.classList.toggle("show", isActivePanel);
+    panel.classList.toggle("in", isActivePanel);
+    panel.classList.toggle("active", isActivePanel);
+  });
+};
+
+const showHelpModal = () => {
+  const helpModal = document.querySelector(HELP_MODAL_SELECTOR);
+
+  if (!helpModal) {
+    return;
+  }
+
+  helpModal.inert = false;
+  helpModal.classList.add("show", "in");
+  helpModal.style.display = "block";
+  helpModal.setAttribute("aria-modal", "true");
+  helpModal.removeAttribute("aria-hidden");
+  document.body.classList.add("modal-open");
+
+  if (!helpModal.dataset.sinpModalCloseBound) {
+    helpModal
+      .querySelectorAll(
+        ".btn-close, .close, [data-bs-dismiss='modal'], [data-dismiss='modal']"
+      )
+      .forEach((button) => {
+        button.addEventListener("click", hideHelpModal);
+      });
+    helpModal.dataset.sinpModalCloseBound = "true";
+  }
+};
+
+const moveFocusOutside = (element) => {
+  if (!element?.contains(document.activeElement)) {
+    return;
+  }
+
+  document.activeElement?.blur();
+
+  const focusTarget =
+    document.getElementById("map") ||
+    document.querySelector(".ol-viewport") ||
+    document.body;
+
+  if (focusTarget && typeof focusTarget.focus === "function") {
+    const hadTabIndex = focusTarget.hasAttribute("tabindex");
+
+    if (!hadTabIndex) {
+      focusTarget.setAttribute("tabindex", "-1");
+    }
+
+    focusTarget.focus({ preventScroll: true });
+
+    if (!hadTabIndex) {
+      focusTarget.removeAttribute("tabindex");
+    }
+  }
+};
+
+const hasVisibleModal = (excludedModal = null) =>
+  Array.from(document.querySelectorAll(".modal.show, .modal.in")).some(
+    (modal) => modal !== excludedModal && modal.style.display !== "none"
+  );
+
+const cleanupModalBlockingState = () => {
+  if (hasVisibleModal()) {
+    return;
+  }
+
+  document.body.classList.remove("modal-open");
+  document.querySelectorAll(".modal-backdrop").forEach((backdrop) => backdrop.remove());
+};
+
+const hideHelpModal = () => {
+  const helpModal = document.querySelector(HELP_MODAL_SELECTOR);
+
+  if (!helpModal) {
+    return;
+  }
+
+  moveFocusOutside(helpModal);
+  helpModal.classList.remove("show", "in");
+  helpModal.style.display = "none";
+  helpModal.removeAttribute("aria-modal");
+  helpModal.inert = true;
+  helpModal.setAttribute("aria-hidden", "true");
+
+  cleanupModalBlockingState();
+};
+
+const cleanupShepherdOverlay = () => {
+  document
+    .querySelectorAll(".shepherd-modal-overlay-container, .shepherd-element")
+    .forEach(moveFocusOutside);
+
+  document
+    .querySelectorAll(".shepherd-modal-overlay-container, .shepherd-element")
+    .forEach((element) => element.remove());
+
+  document
+    .querySelectorAll(
+      ".shepherd-enabled, .shepherd-target, .shepherd-target-click-disabled"
+    )
+    .forEach((element) => {
+      element.classList.remove(
+        "shepherd-enabled",
+        "shepherd-target",
+        "shepherd-target-click-disabled"
+      );
+    });
+
+  cleanupModalBlockingState();
+};
+
+const getValidatedSteps = () =>
+  tutorialContent.steps.filter(
+    (step) =>
+      step.enabled &&
+      step.status === "validated" &&
+      tutorialContent.status === "validated"
+  );
+
+const openAdvancedFiltersMenu = () => {
+  const filtersTheme = document.getElementById("theme-react-filters");
+  const filtersContainer = document.getElementById(
+    "react-sidebar-filter-panel"
+  )?.parentElement;
+
+  if (!filtersTheme || !filtersContainer) {
+    return;
+  }
+
+  filtersContainer.style.display = "block";
+  filtersTheme.classList.add("active", "opened");
+};
+
+const expandFilterSection = (dataTour) => {
+  window.dispatchEvent(
+    new CustomEvent("sinpTutorial:expandFilterSection", {
+      detail: { dataTour },
+    })
+  );
+};
+
+const runStepAction = (action) => {
+  switch (action) {
+    case "openAdvancedFilters":
+      openAdvancedFiltersMenu();
+      break;
+    case "openTaxonomicGroupFilter":
+      openAdvancedFiltersMenu();
+      expandFilterSection("filter-taxonomic-group");
+      break;
+    case "openTaxonFilter":
+      openAdvancedFiltersMenu();
+      expandFilterSection("filter-taxon");
+      break;
+    case "openDateFilter":
+      openAdvancedFiltersMenu();
+      expandFilterSection("filter-date");
+      break;
+    default:
+      break;
+  }
+};
+
+const buildTourSteps = async () => {
+  const resolvedSteps = [];
+
+  for (const step of getValidatedSteps()) {
+    const resolvedTarget = step.waitForTarget
+      ? await waitForAnyTarget(step.target)
+      : {
+          selector: Array.isArray(step.target) ? step.target[0] : step.target,
+          element: document.querySelector(
+            Array.isArray(step.target) ? step.target[0] : step.target
+          ),
+        };
+
+    if (!resolvedTarget && step.required) {
+      console.warn(`[Tutoriel] Cible obligatoire introuvable pour l'étape ${step.id}`);
+      return [];
+    }
+
+    if (!resolvedTarget) {
+      console.warn(`[Tutoriel] Étape ignorée, cible introuvable: ${step.id}`);
+      continue;
+    }
+
+    resolvedSteps.push({
+      ...step,
+      resolvedSelector: resolvedTarget.selector,
+    });
+  }
+
+  return resolvedSteps;
+};
+
+const TutorialManager = () => {
+  const activeTourRef = useRef(null);
+  const listenersBoundRef = useRef(false);
+
+  const startTutorial = async () => {
+    activeTourRef.current?.cancel();
+    cleanupShepherdOverlay();
+
+    const steps = await buildTourSteps();
+
+    if (!steps.length) {
+      markTutorialSeen();
+      return;
+    }
+
+    const tour = new Shepherd.Tour({
+      useModalOverlay: true,
+      defaultStepOptions: {
+        cancelIcon: {
+          enabled: true,
+        },
+        classes: "sinp-tutorial-step",
+        modalOverlayOpeningPadding: 6,
+        scrollTo: {
+          behavior: "smooth",
+          block: "center",
+        },
+      },
+    });
+
+    steps.forEach((step, index) => {
+      const isLastStep = index === steps.length - 1;
+
+      tour.addStep({
+        id: step.id,
+        title: step.title,
+        text: step.text,
+        attachTo: {
+          element: step.resolvedSelector,
+          on: step.placement || "auto",
+        },
+        beforeShowPromise: () =>
+          new Promise((resolve) => {
+            runStepAction(step.beforeShowAction);
+            window.setTimeout(resolve, 150);
+          }),
+        buttons: [
+          {
+            text: "Quitter",
+            secondary: true,
+            action: () => tour.cancel(),
+          },
+          ...(index > 0
+            ? [
+                {
+                  text: "Précédent",
+                  secondary: true,
+                  action: () => tour.back(),
+                },
+              ]
+            : []),
+          {
+            text: isLastStep ? "Terminer" : "Suivant",
+            action: () => (isLastStep ? tour.complete() : tour.next()),
+          },
+        ],
+      });
+    });
+
+    const finishTour = () => {
+      markTutorialSeen();
+
+      if (activeTourRef.current === tour) {
+        activeTourRef.current = null;
+      }
+
+      window.setTimeout(cleanupShepherdOverlay, 0);
+      window.setTimeout(cleanupShepherdOverlay, SHEPHERD_CLEANUP_DELAY);
+    };
+
+    tour.on("complete", finishTour);
+    tour.on("cancel", finishTour);
+    activeTourRef.current = tour;
+    tour.start();
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const initTutorialIntro = async () => {
+      const startButton = await waitForElement(INTRO_SELECTOR);
+      const disableButton = document.querySelector(DISABLE_SELECTOR);
+      const resetButton = document.querySelector(RESET_SELECTOR);
+
+      if (
+        !isMounted ||
+        !startButton ||
+        listenersBoundRef.current ||
+        startButton.dataset.sinpTutorialBound === "true"
+      ) {
+        return;
+      }
+
+      listenersBoundRef.current = true;
+      startButton.dataset.sinpTutorialBound = "true";
+
+      startButton.addEventListener("click", () => {
+        localStorage.removeItem(STORAGE_KEYS.disabled);
+        hideHelpModal();
+        window.setTimeout(startTutorial, 350);
+      });
+
+      disableButton?.addEventListener("click", () => {
+        disableTutorial();
+        hideHelpModal();
+      });
+
+      resetButton?.addEventListener("click", () => {
+        localStorage.removeItem(STORAGE_KEYS.disabled);
+        localStorage.removeItem(STORAGE_KEYS.seen);
+        localStorage.removeItem(STORAGE_KEYS.mviewerHelpDisabled);
+        sessionStorage.removeItem(STORAGE_KEYS.introShown);
+        activateTutorialTab();
+        showHelpModal();
+      });
+
+      if (
+        shouldShowIntro() &&
+        sessionStorage.getItem(STORAGE_KEYS.introShown) !== "true"
+      ) {
+        sessionStorage.setItem(STORAGE_KEYS.introShown, "true");
+        activateTutorialTab();
+        showHelpModal();
+      }
+    };
+
+    initTutorialIntro();
+
+    return () => {
+      isMounted = false;
+      activeTourRef.current?.cancel();
+      cleanupShepherdOverlay();
+    };
+  }, []);
+
+  return null;
+};
+
+export default TutorialManager;

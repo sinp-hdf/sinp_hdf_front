@@ -1,0 +1,308 @@
+var reactInjector = (function () {
+  return {
+    // Addon Init
+    init: function () {
+      const initSinpHelpTabs = () => {
+        document.addEventListener("click", function (event) {
+          const tab = event.target.closest(".sinp-help-tabs a[href^='#']");
+
+          if (!tab) {
+            return;
+          }
+
+          const help = tab.closest(".sinp-help");
+          const target = help?.querySelector(tab.getAttribute("href"));
+
+          if (!help || !target) {
+            return;
+          }
+
+          event.preventDefault();
+
+          help.querySelectorAll(".sinp-help-tabs a").forEach((item) => {
+            item.classList.remove("active");
+            item.parentElement?.classList.remove("active");
+            item.setAttribute("aria-selected", "false");
+          });
+
+          help.querySelectorAll(".tab-pane").forEach((pane) => {
+            pane.classList.remove("active", "show", "in");
+          });
+
+          tab.classList.add("active");
+          tab.parentElement?.classList.add("active");
+          tab.setAttribute("aria-selected", "true");
+          target.classList.add("active", "show", "in");
+        });
+      };
+
+      initSinpHelpTabs();
+
+      const isMobileLayout = () =>
+        Boolean(
+          window.configuration?.getConfiguration?.().mobile || window.innerWidth < 992
+        );
+
+      // Fonction pour injecter le conteneur React dans le sidebar
+      const injectSidebarFilterContainer = () => {
+        if (isMobileLayout()) {
+          return;
+        }
+
+        if (document.getElementById("react-sidebar-filter-panel")) {
+          return;
+        }
+
+        const sidebarWrapper = document.getElementById("sidebar-wrapper");
+
+        if (!sidebarWrapper) {
+          console.warn("sidebar-wrapper not found, retrying...");
+          setTimeout(injectSidebarFilterContainer, 200);
+          return;
+        }
+
+        // Vérifier si le conteneur n'existe pas déjà
+        //if (document.getElementById("react-sidebar-filter-panel")) {
+        //  console.log("Container already exists, skipping injection");
+        //  return; // Déjà créé
+        //}
+
+        // Trouver le ul.sidebar-nav principal dans le sidebar-wrapper
+        const sidebarNav = sidebarWrapper.querySelector("ul.sidebar-nav");
+
+        if (!sidebarNav) {
+          console.warn("sidebar-nav not found, retrying...");
+          setTimeout(injectSidebarFilterContainer, 200);
+          return;
+        }
+
+        // Créer un nouveau <ul> pour les filtres (structure séparée du menu principal)
+        const filtersWrapper = document.createElement("ul");
+        filtersWrapper.className = "sidebar-nav nav-pills nav-stacked";
+        filtersWrapper.id = "react-filters-menu";
+        filtersWrapper.style.paddingLeft = "0px";
+
+        // Créer le <li> du thème de filtres
+        const filterTheme = document.createElement("li");
+        filterTheme.className = "level-1";
+        filterTheme.id = "theme-react-filters";
+        filterTheme.setAttribute("data-tour", "advanced-filters-menu");
+
+        // Créer le header cliquable
+        const header = document.createElement("a");
+        header.href = "#";
+        header.innerHTML = `
+          <div class="menu-theme-layers-name">
+            <span class="fa-stack">
+              <i class="fa fa-filter fa-stack-1x"></i>
+            </span>
+            <span>Filtres avancés</span>
+          </div>
+          <div class="toggle-theme-layers react-filters-header-actions">
+            <span
+              class="fa-stack react-filters-toggle-button"
+              role="button"
+              tabindex="0"
+              title="Ouvrir les filtres dans une fenêtre"
+              aria-label="Ouvrir les filtres dans une fenêtre">
+              <i class="fa fa-window-restore fa-stack-1x"></i>
+            </span>
+          </div>
+        `;
+
+        // Créer le conteneur des filtres (initialement caché)
+        const filtersContainer = document.createElement("ul");
+        filtersContainer.className = "nav-pills nav-stacked";
+        filtersContainer.style.listStyleType = "none";
+        filtersContainer.style.display = "none";
+        filtersContainer.style.paddingLeft = "0px";
+
+        // Créer le conteneur React à l'intérieur
+        const reactContainer = document.createElement("div");
+        reactContainer.id = "react-sidebar-filter-panel";
+        reactContainer.className = "react-filter-container";
+        reactContainer.setAttribute("data-tour", "advanced-filters-panel");
+        reactContainer.style.width = "100%";
+        reactContainer.style.maxWidth = "100%";
+        reactContainer.style.boxSizing = "border-box";
+        reactContainer.style.overflow = "visible";
+        reactContainer.style.position = "relative";
+
+        const actionsContainer = document.createElement("div");
+        actionsContainer.id = "react-sidebar-filter-actions";
+        actionsContainer.className = "react-filter-actions-container";
+
+        filtersContainer.appendChild(reactContainer);
+
+        const actionsSection = document.createElement("section");
+        actionsSection.id = "theme-react-filter-actions";
+        actionsSection.className = "react-filter-actions-section";
+        actionsSection.appendChild(actionsContainer);
+
+        const syncActionsHeight = () => {
+          const actionsHeight = Math.ceil(actionsSection.getBoundingClientRect().height);
+          sidebarWrapper.style.setProperty(
+            "--sinp-filter-actions-height",
+            `${actionsHeight}px`
+          );
+        };
+
+        if (typeof ResizeObserver === "function") {
+          const actionsResizeObserver = new ResizeObserver(syncActionsHeight);
+          actionsResizeObserver.observe(actionsSection);
+        } else {
+          window.addEventListener("resize", syncActionsHeight);
+        }
+
+        const modalToggleButton = header.querySelector(".react-filters-toggle-button");
+
+        const openFiltersInModal = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent("reactSidebarFilters:openModal"));
+        };
+
+        if (modalToggleButton) {
+          modalToggleButton.addEventListener("click", openFiltersInModal);
+          modalToggleButton.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") {
+              openFiltersInModal(e);
+            }
+          });
+        }
+
+        // Ajouter le comportement de toggle au clic sur le header
+        header.addEventListener("click", function (e) {
+          e.preventDefault();
+
+          const wrapper = document.getElementById("wrapper");
+          if (wrapper?.classList.contains("toggled-2")) {
+            if (typeof mviewer !== "undefined" && typeof mviewer.toggleMenu === "function") {
+              mviewer.toggleMenu(true);
+            } else {
+              wrapper.classList.remove("toggled-2");
+            }
+          }
+
+          const isHidden = filtersContainer.style.display === "none";
+          filtersContainer.style.display = isHidden ? "block" : "none";
+          filterTheme.classList.toggle("active", isHidden);
+          filterTheme.classList.toggle("opened", isHidden);
+        });
+
+        // Assembler la structure
+        filterTheme.appendChild(header);
+        filterTheme.appendChild(filtersContainer);
+        filtersWrapper.appendChild(filterTheme);
+
+        // Toujours placer les filtres avant les autres menus de la barre latérale.
+        sidebarWrapper.insertBefore(filtersWrapper, sidebarNav);
+        sidebarWrapper.parentElement?.insertBefore(actionsSection, sidebarWrapper);
+        window.requestAnimationFrame(syncActionsHeight);
+
+        // Injecter le CSS pour le sidebar
+        const cssHref =
+          "apps/sinp_hdf/addons/reactInjector/dist/GlobalFiltersSidebar.css";
+        if (!document.querySelector(`link[href='${cssHref}']`)) {
+          const link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.type = "text/css";
+          link.href = cssHref;
+          document.head.appendChild(link);
+        }
+
+        console.log("React sidebar filter container injected successfully");
+
+        // Déclencher un événement pour notifier que le conteneur est prêt
+        window.dispatchEvent(
+          new CustomEvent("sidebarFilterContainerReady", {
+            detail: { containerId: "react-sidebar-filter-panel" },
+          })
+        );
+      };
+
+      // Attendre que mviewer soit complètement initialisé
+      const waitForMviewerInit = () => {
+        if (typeof mviewer !== "undefined" && mviewer.customLayers) {
+          // mviewer est prêt, attendre que le sidebar soit complètement généré
+          setTimeout(injectSidebarFilterContainer, 1000);
+        } else {
+          setTimeout(waitForMviewerInit, 100);
+        }
+      };
+
+      // Démarrer l'attente
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", waitForMviewerInit);
+      } else {
+        waitForMviewerInit();
+      }
+
+      window.addEventListener("resize", injectSidebarFilterContainer);
+
+      // Injecter le bouton filtre dans la barre mobile mviewer
+      const injectMobileFilterButton = () => {
+        const mobileNav = document.getElementById("mvNavbarMobile");
+
+        if (!mobileNav) {
+          setTimeout(injectMobileFilterButton, 300);
+          return;
+        }
+
+        if (document.getElementById("mobile-filter-btn")) {
+          return;
+        }
+
+        const filterBtn = document.createElement("a");
+        filterBtn.id = "mobile-filter-btn";
+        filterBtn.href = "#";
+        filterBtn.setAttribute("data-bs-original-title", "Filtres avancés");
+        filterBtn.innerHTML = '<i class="ri-filter-line"></i>';
+
+        filterBtn.addEventListener("click", function (e) {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent("reactSidebarFilters:openModal"));
+        });
+
+        window.addEventListener("sinpMobileFilters:state", function (event) {
+          filterBtn.classList.toggle("active", Boolean(event.detail?.isOpen));
+        });
+
+        // En mode mobile, la première entrée du DOM est affichée à gauche.
+        mobileNav.prepend(filterBtn);
+      };
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", injectMobileFilterButton);
+      } else {
+        injectMobileFilterButton();
+      }
+
+      // Créer le conteneur global pour les modales (si pas déjà existant)
+      if (!document.getElementById("react-global-root")) {
+        const globalRoot = document.createElement("div");
+        globalRoot.id = "react-global-root";
+        document.body.appendChild(globalRoot);
+      }
+
+      // Ajouter les scripts React
+      const mainScriptSrc = "apps/sinp_hdf/addons/reactInjector/dist/main.js";
+      if (!document.querySelector(`script[src='${mainScriptSrc}']`)) {
+        const mainScript = document.createElement("script");
+        mainScript.src = mainScriptSrc;
+        mainScript.type = "text/javascript";
+        document.body.appendChild(mainScript);
+      }
+
+      const reactCompManagerSrc =
+        "apps/sinp_hdf/addons/reactInjector/dist/reactComponentManager.js";
+      if (!document.querySelector(`script[src='${reactCompManagerSrc}']`)) {
+        const reactCompManagerScript = document.createElement("script");
+        reactCompManagerScript.src = reactCompManagerSrc;
+        reactCompManagerScript.type = "text/javascript";
+        document.body.appendChild(reactCompManagerScript);
+      }
+    },
+  };
+})();
+new CustomComponent("reactInjector", reactInjector.init);
