@@ -1,0 +1,559 @@
+import { parseDateValue } from "../../utils/date.utils";
+
+export const TAB_IDS = {
+  OBSERVATIONS: "observations",
+  DATASETS: "datasets",
+  DONNEES: "donnees",
+  INFORMATIONS: "informations",
+};
+
+export const SELECTION_PROMPT_MESSAGE =
+  "Sélectionnez une entité sur la carte pour afficher le détail.";
+
+const DATASET_METADATA_IDENTIFIER_KEYS = [
+  "uuidJdd",
+  "uuid_jdd",
+  "uuidJDD",
+  "jddUuid",
+  "jdd_uuid",
+  "uuidJeuDonnees",
+  "uuidJeuDeDonnees",
+  "uuid_jeu_donnees",
+  "uuidMetadonneeJdd",
+  "uuidMetadataJdd",
+  "metadataUuidJdd",
+  "fileIdentifierJdd",
+  "file_identifier_jdd",
+  "jddFileIdentifier",
+  "nomFichierJdd",
+  "nom_fichier_jdd",
+  "uuidMetadata",
+  "uuidMetadonnee",
+  "metadataUuid",
+  "fileIdentifier",
+  "file_identifier",
+  "nomFichier",
+  "nom_fichier",
+  "uuid",
+];
+
+const ACQUISITION_FRAME_METADATA_IDENTIFIER_KEYS = [
+  "uuidCA",
+  "uuid_ca",
+  "caUuid",
+  "ca_uuid",
+  "uuidCadreAcquisition",
+  "uuid_cadre_acquisition",
+  "uuidMetadonneeCA",
+  "uuidMetadataCA",
+  "metadataUuidCA",
+  "fileIdentifierCA",
+  "file_identifier_ca",
+  "caFileIdentifier",
+  "nomFichierCA",
+  "nom_fichier_ca",
+  "uuidMetadata",
+  "uuidMetadonnee",
+  "metadataUuid",
+  "fileIdentifier",
+  "file_identifier",
+  "nomFichier",
+  "nom_fichier",
+  "uuid",
+];
+
+const getFirstDefinedValue = (...values) => {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+
+  return null;
+};
+
+export const getFeatureByUid = (layerId, featureUid) => {
+  const source = window.mviewer?.customLayers?.[layerId]?.layer?.getSource?.();
+  const features = source?.getFeatures?.() || [];
+
+  return (
+    features.find((feature) => {
+      const uid = feature?.ol_uid || feature?.get?.("feature_ol_uid");
+      return String(uid) === String(featureUid);
+    }) || null
+  );
+};
+
+export const getFeatureProperties = (feature) => {
+  if (!feature?.getProperties) {
+    return {};
+  }
+
+  return feature.getProperties() || {};
+};
+
+export const getResultPanelTitle = ({
+  layerId,
+  properties = {},
+  selectionSummary = null,
+  selectionMode = false,
+  selectionLayerName = "Zonage environnemental",
+  selectionEntityLabel = "",
+}) => {
+  if (selectionMode) {
+    const entityLabel = selectionEntityLabel || selectionSummary?.selectionLabel || "Entité";
+    return `Résultat pour : ${selectionLayerName} - ${entityLabel}`;
+  }
+
+  const entity =
+    selectionSummary?.selectionLabel ||
+    getFirstDefinedValue(
+      properties.nom_commune,
+      properties.libelle_commune,
+      properties.commune_name,
+      properties.nom_epci,
+      properties.libelle_epci,
+      properties.epci_name,
+      properties.libelle,
+      properties.nom_min,
+      properties.nom_maj,
+      properties.code_insee,
+      properties.code_maille,
+      properties.code
+    ) || getLayerConfig(layerId).panelLabel;
+
+  const normalizedEntity = String(entity).trim();
+
+  return `Résultat pour : ${normalizedEntity}`;
+};
+
+export const getSelectedEntitySummary = (layerId, properties = {}, layerConfig = null) => {
+  const resolvedLayerConfig = layerConfig || getLayerConfig(layerId);
+  const details = Array.isArray(properties.details) ? properties.details : [];
+  const entityCode = getFirstDefinedValue(
+    properties.code_insee,
+    properties.code_maille,
+    properties.code,
+    properties.id_maille,
+    properties.maille
+  );
+  const rawEventCount = getFirstDefinedValue(
+    properties.nb_observations,
+    properties.nb_evenements,
+    properties.nb_events
+  );
+  const derivedEventCount = details.reduce((total, detail) => {
+    const observationCount = Number(detail?.nb_observations);
+    return Number.isFinite(observationCount) ? total + observationCount : total;
+  }, 0);
+  const eventCount =
+    rawEventCount === null || rawEventCount === undefined || String(rawEventCount).trim() === ""
+      ? details.length > 0
+        ? String(derivedEventCount)
+        : null
+      : String(rawEventCount).trim();
+  const rawTaxonCount = getFirstDefinedValue(
+    properties.nb_taxons,
+    properties.nb_taxons_distincts,
+    properties.distinct_taxon_count
+  );
+  const distinctTaxonKeys = new Set(
+    details
+      .map((detail) =>
+        getFirstDefinedValue(detail?.cd_ref, detail?.nom_valide, detail?.nom_vern)
+      )
+      .filter((value) => value !== null)
+      .map((value) => String(value).trim())
+  );
+  const taxonCount =
+    rawTaxonCount === null ||
+    rawTaxonCount === undefined ||
+    String(rawTaxonCount).trim() === ""
+      ? details.length > 0
+        ? String(distinctTaxonKeys.size)
+        : null
+      : String(rawTaxonCount).trim();
+  const rawLastObservationDate = getFirstDefinedValue(
+    properties.last_date_obs,
+    properties.date_derniere_observation
+  );
+  const derivedLastObservationDate = details.reduce((latestValue, detail) => {
+    const candidateValue = detail?.last_date_obs;
+    const candidateDate = parseDateValue(candidateValue);
+    const latestDate = parseDateValue(latestValue);
+
+    if (!candidateDate) {
+      return latestValue;
+    }
+
+    return !latestDate || candidateDate > latestDate ? candidateValue : latestValue;
+  }, null);
+  const lastObservationDate =
+    rawLastObservationDate ?? derivedLastObservationDate ?? null;
+
+  if (!entityCode && eventCount === null) {
+    return null;
+  }
+
+  const primaryValue = resolvedLayerConfig?.primaryValue?.(properties);
+  const normalizedPrimaryValue =
+    primaryValue !== undefined &&
+    primaryValue !== null &&
+    String(primaryValue).trim() !== "" &&
+    String(primaryValue).trim() !== "-"
+      ? String(primaryValue).trim()
+      : null;
+  const selectionLabel =
+    layerId === "communeSearch" && normalizedPrimaryValue && entityCode
+      ? `${normalizedPrimaryValue} (${entityCode})`
+      : entityCode
+        ? String(entityCode)
+        : normalizedPrimaryValue || "-";
+
+  return {
+    selectionLabel,
+    eventCount: eventCount ?? "-",
+    taxonCount: taxonCount ?? "-",
+    lastObservationDate,
+  };
+};
+
+// Carte de synthèse d'une entité : dernière observation et évènements viennent de
+// fn_get_stats, le total d'observations est la somme de "Nb. de données" (hors pagination).
+export const getEntityCardData = (properties = {}, details = []) => {
+  const rows = Array.isArray(details) ? details : [];
+  const observationCount = rows.reduce((total, detail) => {
+    const count = Number(detail?.nb_observations);
+    return Number.isFinite(count) ? total + count : total;
+  }, 0);
+  const lastObservationDate =
+    properties.last_date_obs ??
+    rows.reduce((latest, detail) => {
+      const candidate = parseDateValue(detail?.last_date_obs);
+      const current = parseDateValue(latest);
+      return candidate && (!current || candidate > current) ? detail.last_date_obs : latest;
+    }, null);
+  const rawEventCount = properties.nb_evenements;
+  const hasEventCount =
+    rawEventCount !== null && rawEventCount !== undefined && String(rawEventCount).trim() !== "";
+
+  return {
+    lastObservationDate: lastObservationDate ?? null,
+    eventCount: hasEventCount ? String(rawEventCount).trim() : "-",
+    observationCount,
+  };
+};
+
+const LAYER_CONFIG = {
+  communeSearch: {
+    panelLabel: "Détails de la commune",
+    primaryLabel: "Commune",
+    primaryValue: (properties) =>
+      properties.libelle ||
+      properties.nom_min ||
+      properties.nom_maj ||
+      properties.commune_name ||
+      properties.nom_commune ||
+      "-",
+    secondaryLabel: "Code INSEE",
+    secondaryValue: (properties) => properties.code_insee || properties.code || "-",
+    countLabel: "Nombre d'observations",
+    note: null,
+  },
+  gridSearch5x5: {
+    panelLabel: "Détails de la maille 5x5",
+    primaryLabel: "Maille 5x5",
+    primaryValue: (properties) =>
+      properties.code_maille || properties.id_maille || properties.maille || "-",
+    secondaryLabel: "Système de grille",
+    secondaryValue: () => "5 x 5 km",
+    countLabel: "Nombre d'observations agrégées",
+    note: "Les résultats sont destinés à être agrégés sur la grille 5 x 5 km à l'échelle des Hauts-de-France.",
+  },
+  grid10x10search: {
+    panelLabel: "Détails de la maille 10x10",
+    primaryLabel: "Maille 10x10",
+    primaryValue: (properties) =>
+      properties.code_maille || properties.id_maille || properties.maille || "-",
+    secondaryLabel: "Système de grille",
+    secondaryValue: () => "10 x 10 km",
+    countLabel: "Nombre d'observations agrégées",
+    note: "Les résultats sont destinés à être agrégés sur la grille 10 x 10 km à l'échelle des Hauts-de-France.",
+  },
+};
+
+export const getLayerConfig = (layerId) => {
+  return LAYER_CONFIG[layerId] || LAYER_CONFIG.communeSearch;
+};
+
+export const getMetadataBaseUrl = () => {
+  return (
+    window.mviewer?.env?.[window.mviewer?.env?.CURRENT_ENV]
+      ?.GEONETWORK_METADATA_BASE_URL || null
+  );
+};
+
+export const buildMetadataUrl = (baseUrl, metadataIdentifier) => {
+  const normalizedBaseUrl =
+    typeof baseUrl === "string" && baseUrl.trim() !== ""
+      ? baseUrl.trim().replace(/\/+$/, "")
+      : null;
+  const normalizedIdentifier =
+    metadataIdentifier !== undefined &&
+    metadataIdentifier !== null &&
+    String(metadataIdentifier).trim() !== ""
+      ? String(metadataIdentifier).trim()
+      : null;
+
+  if (!normalizedBaseUrl || !normalizedIdentifier) {
+    return null;
+  }
+
+  return `${normalizedBaseUrl}/${encodeURIComponent(normalizedIdentifier)}`;
+};
+
+const getMetadataIdentifier = (item = {}, keys = []) => {
+  return getFirstDefinedValue(...keys.map((key) => item?.[key]));
+};
+
+export const paginateItems = (items = [], pageSize, page) => {
+  if (pageSize === "all") {
+    return items;
+  }
+
+  const size = Number(pageSize);
+  const startIndex = (page - 1) * size;
+  return items.slice(startIndex, startIndex + size);
+};
+
+export const getTotalPages = (items = [], pageSize) => {
+  if (pageSize === "all") {
+    return 1;
+  }
+
+  const size = Number(pageSize);
+  return Math.max(1, Math.ceil(items.length / size));
+};
+
+export const formatPageSizeValue = (value) => {
+  return value === "all" ? "all" : String(value);
+};
+
+export const parsePageSizeValue = (value) => {
+  return value === "all" ? "all" : Number(value);
+};
+
+const getColumnSortValue = (item, column) => {
+  if (column?.getSortValue) {
+    return column.getSortValue(item);
+  }
+
+  if (column?.getValue) {
+    return column.getValue(item);
+  }
+
+  return item?.[column?.id];
+};
+
+const STRING_COLLATOR = new Intl.Collator("fr", {
+  sensitivity: "base",
+});
+
+const normalizeSortValue = (value, sortType = "string") => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
+
+  if (sortType === "date") {
+    const parsedDate = parseDateValue(value);
+    return parsedDate ? parsedDate.getTime() : null;
+  }
+
+  if (sortType === "number") {
+    if (typeof value !== "number" && typeof value !== "string") {
+      return null;
+    }
+
+    const normalizedNumber =
+      typeof value === "number"
+        ? value
+        : Number(value.trim().replace(/\s/g, "").replace(",", "."));
+    return Number.isFinite(normalizedNumber) ? normalizedNumber : null;
+  }
+
+  return String(value).trim();
+};
+
+const compareSortValues = (leftValue, rightValue, sortType) => {
+  if (sortType === "number" || sortType === "date") {
+    return leftValue - rightValue;
+  }
+
+  return STRING_COLLATOR.compare(leftValue, rightValue);
+};
+
+export const sortTableItems = (items = [], columns = [], sortConfig = null) => {
+  if (!sortConfig?.columnId) {
+    return items;
+  }
+
+  const column = columns.find((candidate) => candidate.id === sortConfig.columnId);
+  if (!column?.sortable) {
+    return items;
+  }
+
+  const directionFactor = sortConfig.direction === "desc" ? -1 : 1;
+
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftValue = normalizeSortValue(getColumnSortValue(left.item, column), column.sortType);
+      const rightValue = normalizeSortValue(
+        getColumnSortValue(right.item, column),
+        column.sortType
+      );
+
+      if (leftValue === null && rightValue === null) {
+        return left.index - right.index;
+      }
+      if (leftValue === null) {
+        return 1;
+      }
+      if (rightValue === null) {
+        return -1;
+      }
+
+      const comparison = compareSortValues(leftValue, rightValue, column.sortType);
+      if (comparison !== 0) {
+        return comparison * directionFactor;
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ item }) => item);
+};
+
+export const groupTableItems = (items = [], groupBy = null, columns = [], sortConfig = null) => {
+  if (!groupBy?.getValue) {
+    return [];
+  }
+
+  const groupedItems = new Map();
+
+  items.forEach((item, index) => {
+    const rawLabel = groupBy.getValue(item);
+    const label =
+      rawLabel !== undefined && rawLabel !== null && String(rawLabel).trim() !== ""
+        ? String(rawLabel).trim()
+        : groupBy.emptyLabel || "Non renseigné";
+    const key = `${label}-${index}`;
+
+    if (!groupedItems.has(label)) {
+      groupedItems.set(label, {
+        key,
+        label,
+        items: [],
+      });
+    }
+
+    groupedItems.get(label).items.push(item);
+  });
+
+  return Array.from(groupedItems.values())
+    .sort((left, right) => left.label.localeCompare(right.label, "fr", { sensitivity: "base" }))
+    .map((group) => ({
+      ...group,
+      items:
+        sortConfig?.columnId && sortConfig.columnId !== groupBy.columnId
+          ? sortTableItems(group.items, columns, sortConfig)
+          : group.items,
+    }));
+};
+
+export const groupJddDetails = (details = []) => {
+  const groups = new Map();
+
+  details.forEach((detail, index) => {
+    const caSourceId = getFirstDefinedValue(detail.idCA);
+    const caId = getFirstDefinedValue(caSourceId, detail.libelCA, `ca-${index}`);
+    const caKey = String(caId);
+    const caLabel = getFirstDefinedValue(
+      detail.libelCA,
+      "Cadre d'acquisition non renseigné"
+    );
+    const datasetSourceId = getFirstDefinedValue(detail.idJdd);
+    const datasetId = getFirstDefinedValue(
+      datasetSourceId,
+      detail.libelJdd,
+      `jdd-${index}`
+    );
+    const datasetKey = String(datasetId);
+    const datasetLabel = getFirstDefinedValue(
+      detail.libelJdd,
+      "Jeu de données non renseigné"
+    );
+    const datasetCreationDate = getFirstDefinedValue(
+      detail.datCreaJdd,
+      detail.dat_crea_jdd,
+      detail.dateCreationJdd,
+      detail.date_creation_jdd
+    );
+
+    if (!groups.has(caKey)) {
+      groups.set(caKey, {
+        key: caKey,
+        idCA: caSourceId ? String(caSourceId) : null,
+        libelCA: String(caLabel),
+        metadataId: getMetadataIdentifier(
+          detail,
+          ACQUISITION_FRAME_METADATA_IDENTIFIER_KEYS
+        ),
+        datasets: new Map(),
+      });
+    }
+
+    const group = groups.get(caKey);
+
+    if (!group.datasets.has(datasetKey)) {
+      group.datasets.set(datasetKey, {
+        key: datasetKey,
+        idJdd: datasetSourceId ? String(datasetSourceId) : null,
+        libelJdd: String(datasetLabel),
+        datCreaJdd: datasetCreationDate,
+        metadataId: getMetadataIdentifier(detail, DATASET_METADATA_IDENTIFIER_KEYS),
+      });
+    }
+  });
+
+  return Array.from(groups.values()).map((group) => ({
+    key: group.key,
+    idCA: group.idCA,
+    libelCA: group.libelCA,
+    metadataId: group.metadataId,
+    datasets: Array.from(group.datasets.values()).map((dataset) => ({
+      key: dataset.key,
+      idJdd: dataset.idJdd,
+      libelJdd: dataset.libelJdd,
+      datCreaJdd: dataset.datCreaJdd,
+      metadataId: dataset.metadataId,
+    })),
+  }));
+};
+
+export const getTableWrapperStyle = (rowCount, options = {}) => {
+  const {
+    headerHeight = 34,
+    rowHeight = 34,
+    maxHeight = "calc(100vh - 260px)",
+  } = options;
+
+  if (!rowCount || rowCount <= 0) {
+    return {};
+  }
+
+  const contentHeight = headerHeight + rowCount * rowHeight;
+
+  return {
+    maxHeight: `min(${maxHeight}, ${contentHeight}px)`,
+  };
+};
